@@ -3,10 +3,59 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ttools</title>
+  <title>ttools – Unterrichts-Tools</title>
+  <link rel="stylesheet" href="shared/styles.css">
 </head>
 <body>
-  <h1>ttools</h1>
-  <p>Willkommen bei ttools.</p>
+  <main>
+    <h1>Unterrichts-Tools</h1>
+    <p class="muted">Kleine Helfer für den Unterricht – direkt im Browser, ohne Anmeldung.</p>
+    <div id="tool-grid"></div>
+  </main>
+
+  <script src="tools.js"></script>
+  <script src="shared/nav.js"></script>
+  <script>
+    (function () {
+      const container = document.getElementById("tool-grid");
+      const tools = Array.isArray(window.TOOLS) ? window.TOOLS : [];
+
+      if (!tools.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted";
+        empty.textContent = "Noch keine Tools – die ersten sind in Arbeit.";
+        container.appendChild(empty);
+        return;
+      }
+
+      const grid = document.createElement("div");
+      grid.className = "card-grid";
+
+      tools.forEach(function (tool) {
+        const card = document.createElement("a");
+        card.className = "card";
+        card.href = tool.href;
+
+        const icon = document.createElement("div");
+        icon.className = "card__icon";
+        icon.textContent = tool.icon || "🔧";
+
+        const title = document.createElement("h2");
+        title.className = "card__title";
+        title.textContent = tool.title;
+
+        const desc = document.createElement("p");
+        desc.className = "card__desc";
+        desc.textContent = tool.desc || "";
+
+        card.appendChild(icon);
+        card.appendChild(title);
+        card.appendChild(desc);
+        grid.appendChild(card);
+      });
+
+      container.appendChild(grid);
+    })();
+  </script>
 </body>
 </html>
