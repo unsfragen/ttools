@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sitzplan – ttools</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+  <style>
+    /* ===== Layout der Bedienbereiche ===== */
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: var(--space-4);
+      margin-bottom: var(--space-4);
+    }
+    .card h2 { margin-top: 0; font-size: var(--font-size-lg); }
+    .row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+    .row + .row, .card label, .card textarea, .card .chips { margin-top: var(--space-2); }
+    textarea { width: 100%; resize: vertical; }
+    .stepper { display: inline-flex; align-items: center; gap: var(--space-2); }
+    .stepper button { width: 38px; }
+    .stepper output { min-width: 2ch; text-align: center; font-weight: 600; }
+    .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .chips label {
+      border: 1px solid var(--color-border); border-radius: 999px;
+      padding: 2px 10px; display: inline-flex; gap: 6px; align-items: center;
+      background: var(--color-surface); cursor: pointer; margin-top: 0;
+    }
+    .rule-list { list-style: none; padding: 0; margin: var(--space-3) 0 0; }
+    .rule-list li {
+      display: flex; justify-content: space-between; gap: var(--space-2);
+      align-items: center; padding: var(--space-2) 0;
+      border-bottom: 1px dashed var(--color-border);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+
+    /* ===== Hinweise ===== */
+    .notice { padding: var(--space-3); border-radius: var(--radius); margin-bottom: var(--space-2); }
+    .notice p { margin: var(--space-1) 0; }
+    .notice--error { background: #fdecea; border: 1px solid var(--color-danger); }
+    .notice--warn { background: #fff8e1; border: 1px solid #b45309; }
+    .notice--info { background: #eff6ff; border: 1px solid var(--color-primary); }
+
+    /* ===== Sitzplan ===== */
+    .board-card { overflow-x: auto; }
+    .tafel {
+      background: #334155; color: #fff; text-align: center; font-weight: 600;
+      padding: var(--space-2); border-radius: var(--radius);
+      max-width: 60%; margin: 0 auto var(--space-4);
+    }
+    #seat-grid { display: grid; gap: 10px; }
+    .seat {
+      position: relative; min-height: 64px; padding: 14px 4px 4px;
+      border: 1px solid var(--color-border); border-radius: var(--radius);
+      background: var(--color-surface); font: inherit; color: inherit;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: none; cursor: grab;
+    }
+    .seat__nr {
+      position: absolute; top: 2px; left: 6px;
+      font-size: 11px; color: var(--color-muted);
+    }
+    .seat__name {
+      font-weight: 700; text-align: center; word-break: break-word;
+      font-size: clamp(0.85rem, 1.8vw, 1.2rem);
+    }
+    .seat--empty { cursor: default; }
+    .seat--empty .seat__name { color: var(--color-muted); font-weight: 400; }
+    .seat--locked {
+      cursor: not-allowed; color: var(--color-muted);
+      background: repeating-linear-gradient(45deg, #ececec, #ececec 6px, #f8f8f8 6px, #f8f8f8 12px);
+    }
+    .seat--absent .seat__name { text-decoration: line-through; color: var(--color-muted); }
+    .seat--selected { outline: 3px solid var(--color-primary); outline-offset: 1px; }
+    .seat--over { outline: 3px dashed var(--color-primary); outline-offset: 1px; }
+    .seat--invalid { outline: 3px solid var(--color-danger); outline-offset: 1px; }
+    .seat--dragging { opacity: 0.4; }
+    .ghost {
+      position: fixed; z-index: 99; pointer-events: none;
+      transform: translate(-50%, -120%);
+      background: var(--color-primary); color: var(--color-primary-contrast);
+      padding: 6px 12px; border-radius: var(--radius); font-weight: 700;
+      box-shadow: var(--shadow); white-space: nowrap;
+    }
+    .lock-on { background: var(--color-danger); border-color: var(--color-danger); color: #fff; }
+
+    :focus-visible { outline: 3px solid var(--color-primary); outline-offset: 2px; }
+    @media (prefers-reduced-motion: no-preference) {
+      .seat { transition: outline-color 0.15s, background-color 0.15s; }
+    }
+
+    /* ===== Druck: nur den Plan ausgeben ===== */
+    @page { size: landscape; margin: 12mm; }
+    @media print {
+      .site-header, .no-print { display: none !important; }
+      body { background: #fff; }
+      main { max-width: none; padding: 0; }
+      .board-card { border: none; box-shadow: none; padding: 0; }
+      .seat { border: 1.5px solid #555; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 class="no-print">🪑 Sitzplan</h1>
+    <p class="muted no-print">Klasse wählen, Raum einstellen, Regeln festlegen – dann mischen.
+      Danach lassen sich Namen per Ziehen (auch am Tablet) oder durch zweimaliges Antippen tauschen.</p>
+
+    <div class="controls no-print">
+      <section class="card">
+        <h2>Klasse</h2>
+        <div class="row">
+          <select id="class-select" aria-label="Klasse wählen"></select>
+          <button class="btn" id="class-new">Neu</button>
+          <button class="btn" id="class-rename">Umbenennen</button>
+          <button class="btn btn-danger" id="class-delete">Löschen</button>
+        </div>
+        <label for="students-input">Schülernamen – einfach aus Excel einfügen (Spalte oder Zeile), sonst ein Name pro Zeile:</label>
+        <textarea id="students-input" rows="7" placeholder="Anna Muster&#10;Ben Beispiel&#10;…"></textarea>
+        <div class="row">
+          <button class="btn btn-primary" id="students-save">Liste übernehmen</button>
+          <span id="students-count" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Raum</h2>
+        <div class="row">
+          <span class="stepper" aria-label="Reihen">
+            <button class="btn" id="rows-minus" aria-label="Reihe entfernen">−</button>
+            <output id="rows-out"></output>
+            <button class="btn" id="rows-plus" aria-label="Reihe hinzufügen">+</button>
+          </span>
+          Reihen
+          <span class="stepper" aria-label="Plätze pro Reihe">
+            <button class="btn" id="cols-minus" aria-label="Platz entfernen">−</button>
+            <output id="cols-out"></output>
+            <button class="btn" id="cols-plus" aria-label="Platz hinzufügen">+</button>
+          </span>
+          Plätze pro Reihe
+        </div>
+        <p class="muted">Reihe 1 ist vorne an der Tafel.</p>
+        <fieldset style="border:none;padding:0;margin:0;">
+          <legend>Gänge (zwischen Spalten):</legend>
+          <div class="chips" id="aisle-list"></div>
+        </fieldset>
+        <div class="row">
+          <button class="btn" id="lock-toggle" aria-pressed="false">🚫 Plätze sperren: aus</button>
+          <span class="muted">Wenn aktiv: Platz antippen, um ihn zu sperren/freizugeben.</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Regeln</h2>
+        <div class="row">
+          <select id="rule-type" aria-label="Regeltyp">
+            <option value="fix">Fixplatz</option>
+            <option value="neben">Nebeneinander</option>
+            <option value="getrennt">Getrennt</option>
+            <option value="erstereihe">Erste Reihe</option>
+            <option value="gruppe">Gruppe auseinander</option>
+          </select>
+          <span id="rule-fields" class="row" style="margin-top:0;"></span>
+          <button class="btn" id="rule-add">Hinzufügen</button>
+        </div>
+        <ul class="rule-list" id="rule-list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Heute abwesend</h2>
+        <p class="muted">Nur für diese Erstellung – wird nicht gespeichert.</p>
+        <div class="chips" id="absent-list"></div>
+      </section>
+    </div>
+
+    <div class="actions no-print" style="margin-bottom: var(--space-4);">
+      <button class="btn btn-primary" id="btn-shuffle">🎲 Mischen</button>
+      <button class="btn" id="btn-print">🖨️ Drucken</button>
+      <button class="btn" id="btn-png">🖼️ Als Bild speichern</button>
+    </div>
+
+    <div id="notices" class="no-print" aria-live="polite"></div>
+
+    <section class="card board-card">
+      <h2 id="plan-title">Sitzplan</h2>
+      <div class="tafel">Tafel</div>
+      <div id="seat-grid"></div>
+    </section>
+  </main>
+
+  <script src="../tools.js"></script>
+  <script src="../shared/nav.js"></script>
+  <script src="../shared/classes.js"></script>
+  <script>
+    // ======================================================================
+    // Logik – DOM-frei, damit sie in Node getestet werden kann.
+    // ======================================================================
+    globalThis.Sitzplan = (function () {
+      function seatPos(nr, layout) {
+        const row = Math.ceil(nr / layout.cols);
+        return { row: row, col: nr - (row - 1) * layout.cols };
+      }
+
+      function buildSeats(layout) {
+        const seats = [];
+        for (let row = 1; row <= layout.rows; row++) {
+          for (let col = 1; col <= layout.cols; col++) {
+            const nr = (row - 1) * layout.cols + col;
+            seats.push({ nr: nr, row: row, col: col, locked: layout.locked.indexOf(nr) !== -1 });
+          }
+        }
+        return seats;
+      }
+
+      // Nebeneinander = gleiche Reihe, Nachbarspalte, kein Gang dazwischen.
+      function areAdjacent(nrA, nrB, layout) {
+        const a = seatPos(nrA, layout);
+        const b = seatPos(nrB, layout);
+        if (a.row !== b.row || Math.abs(a.col - b.col) !== 1) return false;
+        return layout.aisles.indexOf(Math.min(a.col, b.col)) === -1;
+      }
+
+      function distance(nrA, nrB, layout) {
+        const a = seatPos(nrA, layout);
+        const b = seatPos(nrB, layout);
+        return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
+      }
+
+      // Gangfreier Spaltenabschnitt, in dem die Spalte liegt: [start, end]
+      function segmentOf(col, layout) {
+        let start = 1;
+        let end = layout.cols;
+        layout.aisles.forEach(function (a) {
+          if (a < col && a + 1 > start) start = a + 1;
+          if (a >= col && a < end) end = a;
+        });
+        return { start: start, end: end };
+      }
+
+      // Robustes Parsen eingefügter Namen (z. B. Copy-Paste aus Excel):
+      // Zeilen/Tabs zuerst, sonst Semikolons, sonst Kommas. Trimmt und dedupliziert.
+      function parseNames(text) {
+        let parts;
+        if (/[\r\n\t]/.test(text)) parts = text.split(/[\r\n\t]+/);
+        else if (text.indexOf(";") !== -1) parts = text.split(";");
+        else parts = text.split(",");
+        const seen = {};
+        const out = [];
+        parts.forEach(function (p) {
+          const t = p.replace(/\s+/g, " ").trim();
+          if (t && !seen[t]) { seen[t] = true; out.push(t); }
+        });
+        return out;
+      }
+
+      function ruleText(r) {
+        if (r.type === "fix") return r.student + " sitzt fest auf Platz " + r.seat;
+        if (r.type === "neben") return r.a + " sitzt neben " + r.b;
+        if (r.type === "getrennt") return r.a + " und " + r.b + " sitzen nicht nebeneinander";
+        if (r.type === "erstereihe") return r.student + " sitzt in Reihe 1";
+        if (r.type === "gruppe") return "Gruppe auseinander: " + r.members.join(", ");
+        return "";
+      }
+
+      function ruleStudents(r) {
+        if (r.type === "fix" || r.type === "erstereihe") return [r.student];
+        if (r.type === "neben" || r.type === "getrennt") return [r.a, r.b];
+        if (r.type === "gruppe") return r.members.slice();
+        return [];
+      }
+
+      // Nur Regeln behalten, deren Beteiligte alle mitmischen (anwesend).
+      function effectiveRules(rules, present) {
+        const has = function (n) { return present.indexOf(n) !== -1; };
+        const out = [];
+        rules.forEach(function (r) {
+          if (r.type === "gruppe") {
+            const members = r.members.filter(has);
+            if (members.length >= 2) out.push({ id: r.id, type: "gruppe", members: members });
+          } else if (ruleStudents(r).every(has)) {
+            out.push(r);
+          }
+        });
+        return out;
+      }
+
+      function shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+        }
+        return arr;
+      }
+
+      function pairKey(a, b) { return a < b ? a + " " + b : b + " " + a; }
+
+      // Nebeneinander-Regeln zu Ketten verbinden ("A neben B", "B neben C" → A-B-C).
+      // Unmögliche Komponenten (Verzweigung/Kreis) werden hier weggelassen –
+      // checkConflicts meldet sie als Fehler.
+      function buildChains(nebenRules) {
+        const adj = {};
+        nebenRules.forEach(function (r) {
+          (adj[r.a] = adj[r.a] || []).push(r.b);
+          (adj[r.b] = adj[r.b] || []).push(r.a);
+        });
+        const visited = {};
+        const chains = [];
+        Object.keys(adj).forEach(function (start) {
+          if (visited[start]) return;
+          const comp = [];
+          const stack = [start];
+          while (stack.length) {
+            const n = stack.pop();
+            if (visited[n]) continue;
+            visited[n] = true;
+            comp.push(n);
+            adj[n].forEach(function (m) { if (!visited[m]) stack.push(m); });
+          }
+          if (comp.some(function (n) { return adj[n].length > 2; })) return;
+          const edges = comp.reduce(function (s, n) { return s + adj[n].length; }, 0) / 2;
+          if (edges >= comp.length) return; // Kreis
+          let cur = comp.find(function (n) { return adj[n].length === 1; }) || comp[0];
+          let prev = null;
+          const chain = [cur];
+          while (chain.length < comp.length) {
+            const next = adj[cur].find(function (m) { return m !== prev; });
+            if (!next) break;
+            chain.push(next);
+            prev = cur;
+            cur = next;
+          }
+          chains.push(chain);
+        });
+        return chains;
+      }
+
+      // Widersprüche/Unerfüllbares VOR dem Mischen erkennen.
+      // students = ganze Klasse, present = heute mitmischende Namen.
+      function checkConflicts(rules, students, layout, present) {
+        present = present || students;
+        const errors = [];
+        const hints = [];
+        const maxNr = layout.rows * layout.cols;
+        const seats = buildSeats(layout);
+        const lockedSet = {};
+        layout.locked.forEach(function (nr) { lockedSet[nr] = true; });
+
+        // Regeln mit unbekannten Namen → Hinweis, Regel wird ignoriert
+        rules.forEach(function (r) {
+          const missing = ruleStudents(r).filter(function (n) { return students.indexOf(n) === -1; });
+          if (missing.length) {
+            hints.push("Regel „" + ruleText(r) + "“ wird ignoriert: " +
+              missing.join(", ") + " ist nicht (mehr) in der Klasse.");
+          }
+        });
+
+        const eff = effectiveRules(rules, present);
+        const fixRules = eff.filter(function (r) { return r.type === "fix"; });
+        const nebenRules = eff.filter(function (r) { return r.type === "neben"; });
+        const getrenntRules = eff.filter(function (r) { return r.type === "getrennt"; });
+        const erstRules = eff.filter(function (r) { return r.type === "erstereihe"; });
+
+        // neben + getrennt für dasselbe Paar
+        const nebenKeys = {};
+        nebenRules.forEach(function (r) { nebenKeys[pairKey(r.a, r.b)] = true; });
+        getrenntRules.forEach(function (r) {
+          if (nebenKeys[pairKey(r.a, r.b)]) {
+            errors.push("Widerspruch: „" + r.a + " neben " + r.b +
+              "“ und „" + r.a + " getrennt von " + r.b + "“ zugleich.");
+          }
+        });
+
+        // Fixplätze: doppelt belegt, doppelt vergeben, ungültig, gesperrt
+        const fixSeatByStudent = {};
+        const fixStudentBySeat = {};
+        fixRules.forEach(function (r) {
+          if (r.seat < 1 || r.seat > maxNr) {
+            errors.push("Fixplatz " + r.seat + " (" + r.student + ") existiert nicht – das Raster hat nur " + maxNr + " Plätze.");
+            return;
+          }
+          if (lockedSet[r.seat]) {
+            errors.push("Fixplatz " + r.seat + " (" + r.student + ") ist gesperrt.");
+            return;
+          }
+          if (fixSeatByStudent[r.student] !== undefined && fixSeatByStudent[r.student] !== r.seat) {
+            errors.push(r.student + " hat zwei verschiedene Fixplätze (" + fixSeatByStudent[r.student] + " und " + r.seat + ").");
+            return;
+          }
+          if (fixStudentBySeat[r.seat] && fixStudentBySeat[r.seat] !== r.student) {
+            errors.push("Platz " + r.seat + " ist doppelt fix vergeben (" + fixStudentBySeat[r.seat] + " und " + r.student + ").");
+            return;
+          }
+          fixSeatByStudent[r.student] = r.seat;
+          fixStudentBySeat[r.seat] = r.student;
+        });
+
+        // Erste Reihe: Widerspruch zu Fixplatz + Kapazität
+        let erstNeedingSeat = 0;
+        erstRules.forEach(function (r) {
+          const fixSeat = fixSeatByStudent[r.student];
+          if (fixSeat !== undefined) {
+            if (seatPos(fixSeat, layout).row !== 1) {
+              errors.push(r.student + " soll in Reihe 1 sitzen, hat aber Fixplatz " + fixSeat +
+                " (Reihe " + seatPos(fixSeat, layout).row + ").");
+            }
+          } else {
+            erstNeedingSeat++;
+          }
+        });
+        const row1Free = seats.filter(function (s) {
+          return s.row === 1 && !s.locked && !fixStudentBySeat[s.nr];
+        }).length;
+        if (erstNeedingSeat > row1Free) {
+          errors.push(erstNeedingSeat + " Personen sollen in Reihe 1 sitzen, dort sind aber nur " +
+            row1Free + " Plätze frei.");
+        }
+
+        // Nebeneinander: Verzweigung, Kreis, Kettenlänge, Fixplatz-Anker
+        const adj = {};
+        nebenRules.forEach(function (r) {
+          (adj[r.a] = adj[r.a] || []).push(r.b);
+          (adj[r.b] = adj[r.b] || []).push(r.a);
+        });
+        Object.keys(adj).forEach(function (n) {
+          if (adj[n].length > 2) {
+            errors.push(n + " müsste neben mehr als zwei Personen gleichzeitig sitzen – unmöglich.");
+          }
+        });
+        const chains = buildChains(nebenRules);
+        let maxRun = 0;
+        for (let row = 1; row <= layout.rows; row++) {
+          let run = 0;
+          for (let col = 1; col <= layout.cols; col++) {
+            const nr = (row - 1) * layout.cols + col;
+            run = lockedSet[nr] ? 0 : run + 1;
+            if (run > maxRun) maxRun = run;
+            if (layout.aisles.indexOf(col) !== -1) run = 0;
+          }
+        }
+        chains.forEach(function (chain) {
+          if (chain.length > maxRun) {
+            errors.push("Die Nebeneinander-Kette " + chain.join(" – ") + " (" + chain.length +
+              " Personen) passt in keinen zusammenhängenden Block (längster freier Block: " + maxRun + " Plätze).");
+          }
+        });
+        nebenRules.forEach(function (r) {
+          const sa = fixSeatByStudent[r.a];
+          const sb = fixSeatByStudent[r.b];
+          if (sa !== undefined && sb !== undefined && !areAdjacent(sa, sb, layout)) {
+            errors.push(r.a + " (Platz " + sa + ") und " + r.b + " (Platz " + sb +
+              ") haben Fixplätze, die nicht nebeneinander liegen.");
+          } else if (sa !== undefined || sb !== undefined) {
+            const anchorSeat = sa !== undefined ? sa : sb;
+            const partner = sa !== undefined ? r.b : r.a;
+            const p = seatPos(anchorSeat, layout);
+            const neighbours = [];
+            [p.col - 1, p.col + 1].forEach(function (col) {
+              if (col < 1 || col > layout.cols) return;
+              const nr = (p.row - 1) * layout.cols + col;
+              if (!areAdjacent(anchorSeat, nr, layout)) return;
+              if (lockedSet[nr]) return;
+              if (fixStudentBySeat[nr] && fixStudentBySeat[nr] !== partner) return;
+              neighbours.push(nr);
+            });
+            if (!neighbours.length) {
+              errors.push("Neben dem Fixplatz " + anchorSeat + " ist kein Platz für " + partner +
+                " frei (gesperrt, Gang oder anderweitig fix vergeben).");
+            }
+          }
+        });
+
+        // Kapazität: blockiert nicht, wird nur gemeldet
+        const freeSeats = seats.filter(function (s) { return !s.locked; }).length;
+        if (present.length > freeSeats) {
+          hints.push(present.length + " Personen, aber nur " + freeSeats + " belegbare Plätze – " +
+            (present.length - freeSeats) + " bleiben unverteilt.");
+        }
+
+        return { errors: errors, hints: hints };
+      }
+
+      // Zufällige Verteilung über viele Versuche; Fixplätze/Reihe 1 zuerst,
+      // dann Nebeneinander-Blöcke, dann Rest. Bestes Ergebnis gewinnt.
+      function solve(present, rules, layout) {
+        const seats = buildSeats(layout);
+        const freeNrs = seats.filter(function (s) { return !s.locked; }).map(function (s) { return s.nr; });
+        const eff = effectiveRules(rules, present);
+        const fixRules = eff.filter(function (r) { return r.type === "fix"; })
+          .filter(function (r) { return r.seat >= 1 && r.seat <= layout.rows * layout.cols && layout.locked.indexOf(r.seat) === -1; });
+        const erstRules = eff.filter(function (r) { return r.type === "erstereihe"; });
+        const nebenRules = eff.filter(function (r) { return r.type === "neben"; });
+        const getrenntRules = eff.filter(function (r) { return r.type === "getrennt"; });
+        const gruppen = eff.filter(function (r) { return r.type === "gruppe"; });
+        const chains = buildChains(nebenRules);
+
+        function score(taken) {
+          const pos = {};
+          Object.keys(taken).forEach(function (nr) { pos[taken[nr]] = +nr; });
+          const violations = [];
+          nebenRules.forEach(function (r) {
+            if (pos[r.a] === undefined || pos[r.b] === undefined) {
+              violations.push("„" + ruleText(r) + "“ – mindestens eine Person konnte nicht gesetzt werden.");
+            } else if (!areAdjacent(pos[r.a], pos[r.b], layout)) {
+              violations.push("„" + ruleText(r) + "“ nicht erfüllt.");
+            }
+          });
+          getrenntRules.forEach(function (r) {
+            if (pos[r.a] !== undefined && pos[r.b] !== undefined && areAdjacent(pos[r.a], pos[r.b], layout)) {
+              violations.push("„" + ruleText(r) + "“ nicht erfüllt – sie sitzen nebeneinander.");
+            }
+          });
+          erstRules.forEach(function (r) {
+            if (pos[r.student] !== undefined && seatPos(pos[r.student], layout).row !== 1) {
+              violations.push("„" + ruleText(r) + "“ nicht erfüllt.");
+            } else if (pos[r.student] === undefined) {
+              violations.push("„" + ruleText(r) + "“ – " + r.student + " konnte nicht gesetzt werden.");
+            }
+          });
+          let spread = 0;
+          gruppen.forEach(function (g) {
+            const placed = g.members.filter(function (m) { return pos[m] !== undefined; });
+            let sum = 0;
+            let pairs = 0;
+            for (let i = 0; i < placed.length; i++) {
+              for (let j = i + 1; j < placed.length; j++) {
+                sum += distance(pos[placed[i]], pos[placed[j]], layout);
+                pairs++;
+              }
+            }
+            if (pairs) spread += sum / pairs;
+          });
+          return { total: violations.length * 1000 - spread, violations: violations };
+        }
+
+        function placeChain(chain, taken, placed) {
+          const anchors = chain.filter(function (n) { return placed[n]; });
+          if (anchors.length > 1) return; // zu verzahnt – Rest platziert zufällig, Score regelt
+          const orientations = shuffle([1, -1]);
+          if (anchors.length === 1) {
+            const anchor = anchors[0];
+            const anchorNr = +Object.keys(taken).find(function (nr) { return taken[nr] === anchor; });
+            const ap = seatPos(anchorNr, layout);
+            const seg = segmentOf(ap.col, layout);
+            const idx = chain.indexOf(anchor);
+            for (let oi = 0; oi < orientations.length; oi++) {
+              const dir = orientations[oi];
+              let ok = true;
+              const slots = [];
+              for (let j = 0; j < chain.length; j++) {
+                if (j === idx) continue;
+                const col = ap.col + dir * (j - idx);
+                const nr = (ap.row - 1) * layout.cols + col;
+                if (col < seg.start || col > seg.end || layout.locked.indexOf(nr) !== -1 || taken[nr]) { ok = false; break; }
+                slots.push({ nr: nr, name: chain[j] });
+              }
+              if (ok) {
+                slots.forEach(function (s) { taken[s.nr] = s.name; placed[s.name] = true; });
+                return;
+              }
+            }
+            return;
+          }
+          // ohne Anker: zufälligen freien, gangfreien Block suchen
+          const candidates = [];
+          for (let row = 1; row <= layout.rows; row++) {
+            for (let col = 1; col + chain.length - 1 <= layout.cols; col++) {
+              const seg = segmentOf(col, layout);
+              if (col + chain.length - 1 > seg.end) continue;
+              const nrs = [];
+              let ok = true;
+              for (let j = 0; j < chain.length; j++) {
+                const nr = (row - 1) * layout.cols + col + j;
+                if (layout.locked.indexOf(nr) !== -1 || taken[nr]) { ok = false; break; }
+                nrs.push(nr);
+              }
+              if (ok) candidates.push(nrs);
+            }
+          }
+          if (!candidates.length) return;
+          const slot = candidates[Math.floor(Math.random() * candidates.length)];
+          const ordered = Math.random() < 0.5 ? chain.slice() : chain.slice().reverse();
+          ordered.forEach(function (name, j) { taken[slot[j]] = name; placed[name] = true; });
+        }
+
+        function attempt() {
+          const taken = {};
+          const placed = {};
+          fixRules.forEach(function (r) {
+            if (!placed[r.student] && !taken[r.seat]) { taken[r.seat] = r.student; placed[r.student] = true; }
+          });
+          const row1Free = shuffle(seats.filter(function (s) {
+            return s.row === 1 && !s.locked && !taken[s.nr];
+          }).map(function (s) { return s.nr; }));
+          erstRules.forEach(function (r) {
+            if (placed[r.student]) return;
+            const nr = row1Free.pop();
+            if (nr !== undefined) { taken[nr] = r.student; placed[r.student] = true; }
+          });
+          chains.forEach(function (chain) { placeChain(chain, taken, placed); });
+          const rest = shuffle(present.filter(function (n) { return !placed[n]; }));
+          const restSeats = shuffle(freeNrs.filter(function (nr) { return !taken[nr]; }));
+          rest.forEach(function (n) {
+            const nr = restSeats.pop();
+            if (nr !== undefined) { taken[nr] = n; placed[n] = true; }
+          });
+          return taken;
+        }
+
+        // Lokale Verbesserung: zufällige Tausche behalten, wenn der Score besser wird.
+        function improve(taken) {
+          const fixedSeats = {};
+          fixRules.forEach(function (r) { fixedSeats[r.seat] = true; });
+          const movable = freeNrs.filter(function (nr) { return !fixedSeats[nr]; });
+          if (movable.length < 2) return taken;
+          let bestScore = score(taken).total;
+          for (let i = 0; i < 200; i++) {
+            const a = movable[Math.floor(Math.random() * movable.length)];
+            const b = movable[Math.floor(Math.random() * movable.length)];
+            if (a === b || (!taken[a] && !taken[b])) continue;
+            const ta = taken[a];
+            const tb = taken[b];
+            if (tb === undefined) delete taken[a]; else taken[a] = tb;
+            if (ta === undefined) delete taken[b]; else taken[b] = ta;
+            const s = score(taken).total;
+            if (s < bestScore) {
+              bestScore = s;
+            } else { // zurücktauschen
+              if (ta === undefined) delete taken[a]; else taken[a] = ta;
+              if (tb === undefined) delete taken[b]; else taken[b] = tb;
+            }
+          }
+          return taken;
+        }
+
+        const deadline = Date.now() + 250;
+        let best = null;
+        const perfectPossible = gruppen.length === 0;
+        for (let i = 0; i < 2000; i++) {
+          if (i >= 200 && Date.now() > deadline) break;
+          const taken = improve(attempt());
+          const sc = score(taken);
+          if (!best || sc.total < best.sc.total) best = { taken: taken, sc: sc };
+          if (perfectPossible && best.sc.violations.length === 0) break;
+        }
+
+        const placedNames = {};
+        Object.keys(best.taken).forEach(function (nr) { placedNames[best.taken[nr]] = true; });
+        const unseated = present.filter(function (n) { return !placedNames[n]; });
+        return { plan: best.taken, violations: best.sc.violations, unseated: unseated };
+      }
+
+      return {
+        seatPos: seatPos,
+        buildSeats: buildSeats,
+        areAdjacent: areAdjacent,
+        distance: distance,
+        segmentOf: segmentOf,
+        parseNames: parseNames,
+        ruleText: ruleText,
+        ruleStudents: ruleStudents,
+        effectiveRules: effectiveRules,
+        checkConflicts: checkConflicts,
+        solve: solve,
+      };
+    })();
+
+    // ======================================================================
+    // UI – läuft nur im Browser.
+    // ======================================================================
+    (function () {
+      if (typeof document === "undefined" || !document.getElementById("seat-grid")) return;
+
+      const S = globalThis.Sitzplan;
+      const $ = function (sel) { return document.querySelector(sel); };
+      const DEFAULT_LAYOUT = function () { return { rows: 4, cols: 6, aisles: [], locked: [] }; };
+
+      // --- Tool-eigener Speicher (pro Klasse), try/catch wie ClassStore ---
+      const Store = {
+        KEY: "ttools.sitzplan",
+        cache: null,
+        all: function () {
+          if (this.cache) return this.cache;
+          this.cache = {};
+          try {
+            const raw = localStorage.getItem(this.KEY);
+            if (raw) this.cache = JSON.parse(raw) || {};
+          } catch (e) { /* In-Memory weiter */ }
+          return this.cache;
+        },
+        forClass: function (id) {
+          const all = this.all();
+          if (!all[id]) all[id] = { layout: DEFAULT_LAYOUT(), rules: [], lastPlan: null };
+          return all[id];
+        },
+        removeClass: function (id) { delete this.all()[id]; this.save(); },
+        save: function () {
+          try { localStorage.setItem(this.KEY, JSON.stringify(this.all())); } catch (e) { /* egal */ }
+        },
+      };
+
+      function makeId() {
+        try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) { /* unten */ }
+        return "id-" + Math.random().toString(36).slice(2);
+      }
+
+      // --- Zustand ---
+      let cls = null;        // aktive Klasse (aus ClassStore)
+      let data = null;       // Store.forClass(cls.id)
+      let plan = {};         // Platznummer -> Name
+      const absent = {};     // Name -> true (nur Sitzung)
+      let lockMode = false;
+      let selectedSeat = null;
+      let suppressClick = false;
+
+      function layout() { return data ? data.layout : DEFAULT_LAYOUT(); }
+      function students() { return cls ? cls.students : []; }
+      function presentStudents() { return students().filter(function (n) { return !absent[n]; }); }
+
+      function savePlan() {
+        if (data) { data.lastPlan = plan; Store.save(); }
+      }
+
+      // --- Klasse ---
+      function setClass(c) {
+        cls = c;
+        data = c ? Store.forClass(c.id) : null;
+        plan = (data && data.lastPlan) ? data.lastPlan : {};
+        Object.keys(absent).forEach(function (k) { delete absent[k]; });
+        selectedSeat = null;
+        if (c) ClassStore.setActiveClass(c.id);
+        renderAll();
+      }
+
+      function renderClassSelect() {
+        const sel = $("#class-select");
+        sel.innerHTML = "";
+        const classes = ClassStore.getClasses();
+        if (!classes.length) {
+          const opt = document.createElement("option");
+          opt.textContent = "– keine Klasse –";
+          sel.appendChild(opt);
+        }
+        classes.forEach(function (c) {
+          const opt = document.createElement("option");
+          opt.value = c.id;
+          opt.textContent = c.name;
+          if (cls && c.id === cls.id) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        $("#students-input").value = students().join("\n");
+        $("#students-count").textContent = students().length ? students().length + " Namen" : "";
+      }
+
+      // --- Raum ---
+      function pruneAfterLayoutChange() {
+        const l = layout();
+        const maxNr = l.rows * l.cols;
+        l.aisles = l.aisles.filter(function (a) { return a >= 1 && a < l.cols; });
+        l.locked = l.locked.filter(function (nr) { return nr >= 1 && nr <= maxNr; });
+        Object.keys(plan).forEach(function (nr) { if (+nr > maxNr) delete plan[nr]; });
+      }
+
+      function renderRoom() {
+        const l = layout();
+        $("#rows-out").textContent = l.rows;
+        $("#cols-out").textContent = l.cols;
+        const box = $("#aisle-list");
+        box.innerHTML = "";
+        for (let c = 1; c < l.cols; c++) {
+          const label = document.createElement("label");
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = l.aisles.indexOf(c) !== -1;
+          cb.addEventListener("change", (function (col) {
+            return function () {
+              const i = l.aisles.indexOf(col);
+              if (i === -1) l.aisles.push(col); else l.aisles.splice(i, 1);
+              l.aisles.sort(function (a, b) { return a - b; });
+              Store.save();
+              renderBoard();
+            };
+          })(c));
+          label.appendChild(cb);
+          label.appendChild(document.createTextNode("nach Spalte " + c));
+          box.appendChild(label);
+        }
+      }
+
+      function stepGrid(key, delta, min, max) {
+        const l = layout();
+        l[key] = Math.min(max, Math.max(min, l[key] + delta));
+        pruneAfterLayoutChange();
+        Store.save();
+        savePlan();
+        renderRoom();
+        renderBoard();
+      }
+
+      // --- Regeln ---
+      function studentSelect(id) {
+        const sel = document.createElement("select");
+        sel.id = id;
+        students().forEach(function (n) {
+          const opt = document.createElement("option");
+          opt.value = n;
+          opt.textContent = n;
+          sel.appendChild(opt);
+        });
+        return sel;
+      }
+
+      function renderRuleFields() {
+        const type = $("#rule-type").value;
+        const box = $("#rule-fields");
+        box.innerHTML = "";
+        if (!students().length) {
+          box.appendChild(document.createTextNode("Erst Schülernamen eintragen."));
+          return;
+        }
+        if (type === "fix") {
+          box.appendChild(studentSelect("rule-a"));
+          box.appendChild(document.createTextNode(" auf Platz "));
+          const nr = document.createElement("input");
+          nr.type = "number";
+          nr.id = "rule-seat";
+          nr.min = 1;
+          nr.max = layout().rows * layout().cols;
+          nr.value = 1;
+          nr.style.width = "5em";
+          box.appendChild(nr);
+        } else if (type === "neben" || type === "getrennt") {
+          box.appendChild(studentSelect("rule-a"));
+          box.appendChild(document.createTextNode(type === "neben" ? " neben " : " getrennt von "));
+          const b = studentSelect("rule-b");
+          if (students().length > 1) b.selectedIndex = 1;
+          box.appendChild(b);
+        } else if (type === "erstereihe") {
+          box.appendChild(studentSelect("rule-a"));
+        } else if (type === "gruppe") {
+          const chips = document.createElement("span");
+          chips.className = "chips";
+          chips.id = "rule-members";
+          students().forEach(function (n) {
+            const label = document.createElement("label");
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.value = n;
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode(n));
+            chips.appendChild(label);
+          });
+          box.appendChild(chips);
+        }
+      }
+
+      function addRule() {
+        if (!data || !students().length) return;
+        const type = $("#rule-type").value;
+        let rule = null;
+        if (type === "fix") {
+          rule = { id: makeId(), type: "fix", student: $("#rule-a").value, seat: parseInt($("#rule-seat").value, 10) };
+          if (!rule.seat || rule.seat < 1) return notify([], ["Bitte gültige Platznummer angeben."]);
+        } else if (type === "neben" || type === "getrennt") {
+          const a = $("#rule-a").value;
+          const b = $("#rule-b").value;
+          if (a === b) return notify([], ["Bitte zwei verschiedene Personen wählen."]);
+          rule = { id: makeId(), type: type, a: a, b: b };
+        } else if (type === "erstereihe") {
+          rule = { id: makeId(), type: "erstereihe", student: $("#rule-a").value };
+        } else if (type === "gruppe") {
+          const members = Array.prototype.slice.call(document.querySelectorAll("#rule-members input:checked"))
+            .map(function (cb) { return cb.value; });
+          if (members.length < 2) return notify([], ["Bitte mindestens zwei Personen für eine Gruppe wählen."]);
+          rule = { id: makeId(), type: "gruppe", members: members };
+        }
+        data.rules.push(rule);
+        Store.save();
+        renderRules();
+      }
+
+      function renderRules() {
+        const list = $("#rule-list");
+        list.innerHTML = "";
+        if (!data) return;
+        data.rules.forEach(function (r) {
+          const li = document.createElement("li");
+          const span = document.createElement("span");
+          span.textContent = S.ruleText(r);
+          const del = document.createElement("button");
+          del.className = "btn";
+          del.textContent = "✕";
+          del.setAttribute("aria-label", "Regel löschen: " + S.ruleText(r));
+          del.addEventListener("click", function () {
+            data.rules = data.rules.filter(function (x) { return x.id !== r.id; });
+            Store.save();
+            renderRules();
+          });
+          li.appendChild(span);
+          li.appendChild(del);
+          list.appendChild(li);
+        });
+        if (!data.rules.length) {
+          const li = document.createElement("li");
+          li.className = "muted";
+          li.textContent = "Noch keine Regeln.";
+          list.appendChild(li);
+        }
+      }
+
+      // --- Abwesend ---
+      function renderAbsent() {
+        const box = $("#absent-list");
+        box.innerHTML = "";
+        if (!students().length) {
+          box.textContent = "Erst Schülernamen eintragen.";
+          return;
+        }
+        students().forEach(function (n) {
+          const label = document.createElement("label");
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = !!absent[n];
+          cb.addEventListener("change", function () {
+            if (cb.checked) absent[n] = true; else delete absent[n];
+            renderBoard();
+          });
+          label.appendChild(cb);
+          label.appendChild(document.createTextNode(n));
+          box.appendChild(label);
+        });
+      }
+
+      // --- Hinweise ---
+      function notify(errors, warns, infos) {
+        const box = $("#notices");
+        box.innerHTML = "";
+        function block(cls, title, msgs) {
+          if (!msgs || !msgs.length) return;
+          const div = document.createElement("div");
+          div.className = "notice " + cls;
+          const strong = document.createElement("p");
+          strong.innerHTML = "<strong>" + title + "</strong>";
+          div.appendChild(strong);
+          msgs.forEach(function (m) {
+            const p = document.createElement("p");
+            p.textContent = m;
+            div.appendChild(p);
+          });
+          box.appendChild(div);
+        }
+        block("notice--error", "Das passt nicht zusammen – bitte Regeln anpassen:", errors);
+        block("notice--warn", "Hinweis:", warns);
+        block("notice--info", "Info:", infos);
+      }
+
+      // --- Sitzplan ---
+      function renderBoard() {
+        const l = layout();
+        const grid = $("#seat-grid");
+        grid.innerHTML = "";
+        const cols = [];
+        for (let c = 1; c <= l.cols; c++) {
+          cols.push("minmax(72px, 1fr)");
+          if (l.aisles.indexOf(c) !== -1 && c < l.cols) cols.push("24px");
+        }
+        grid.style.gridTemplateColumns = cols.join(" ");
+        for (let r = 1; r <= l.rows; r++) {
+          for (let c = 1; c <= l.cols; c++) {
+            const nr = (r - 1) * l.cols + c;
+            grid.appendChild(seatEl(nr, l));
+            if (l.aisles.indexOf(c) !== -1 && c < l.cols) {
+              const sp = document.createElement("div");
+              sp.className = "aisle";
+              sp.setAttribute("aria-hidden", "true");
+              grid.appendChild(sp);
+            }
+          }
+        }
+        const today = new Date().toLocaleDateString("de-DE");
+        $("#plan-title").textContent = "Sitzplan" + (cls ? " " + cls.name : "") + " – " + today;
+      }
+
+      function seatEl(nr, l) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "seat";
+        btn.dataset.nr = nr;
+        const locked = l.locked.indexOf(nr) !== -1;
+        const name = plan[nr];
+        const nrSpan = document.createElement("span");
+        nrSpan.className = "seat__nr";
+        nrSpan.textContent = nr;
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "seat__name";
+        if (locked) {
+          btn.classList.add("seat--locked");
+          nameSpan.textContent = "🚫 gesperrt";
+          btn.setAttribute("aria-label", "Platz " + nr + ", gesperrt");
+        } else if (name) {
+          nameSpan.textContent = name;
+          if (absent[name]) btn.classList.add("seat--absent");
+          btn.setAttribute("aria-label", "Platz " + nr + ", " + name);
+        } else {
+          btn.classList.add("seat--empty");
+          nameSpan.textContent = "frei";
+          btn.setAttribute("aria-label", "Platz " + nr + ", frei");
+        }
+        if (selectedSeat === nr) btn.classList.add("seat--selected");
+        btn.appendChild(nrSpan);
+        btn.appendChild(nameSpan);
+        return btn;
+      }
+
+      function flashInvalid(el) {
+        el.classList.add("seat--invalid");
+        setTimeout(function () { el.classList.remove("seat--invalid"); }, 500);
+      }
+
+      function dropOn(targetNr, sourceNr) {
+        const l = layout();
+        if (targetNr === sourceNr) return;
+        if (l.locked.indexOf(targetNr) !== -1) {
+          const el = document.querySelector('.seat[data-nr="' + targetNr + '"]');
+          if (el) flashInvalid(el);
+          return;
+        }
+        const moving = plan[sourceNr];
+        if (!moving) return;
+        const other = plan[targetNr];
+        if (other) plan[sourceNr] = other; else delete plan[sourceNr];
+        plan[targetNr] = moving;
+        savePlan();
+        renderBoard();
+      }
+
+      function toggleLock(nr) {
+        const l = layout();
+        const i = l.locked.indexOf(nr);
+        if (i === -1) {
+          l.locked.push(nr);
+          delete plan[nr]; // Person verliert den Platz; neu mischen oder ziehen
+        } else {
+          l.locked.splice(i, 1);
+        }
+        Store.save();
+        savePlan();
+        renderBoard();
+      }
+
+      function deselect() {
+        selectedSeat = null;
+        document.querySelectorAll(".seat--selected").forEach(function (el) {
+          el.classList.remove("seat--selected");
+        });
+      }
+
+      // Klick / Tastatur: Sperren-Modus oder Tipp-Tausch (Quelle → Ziel)
+      $("#seat-grid").addEventListener("click", function (e) {
+        if (suppressClick) { suppressClick = false; return; }
+        const seat = e.target.closest(".seat");
+        if (!seat) return;
+        const nr = +seat.dataset.nr;
+        if (lockMode) { toggleLock(nr); return; }
+        if (selectedSeat === null) {
+          if (plan[nr]) {
+            selectedSeat = nr;
+            seat.classList.add("seat--selected");
+          }
+        } else if (selectedSeat === nr) {
+          deselect();
+        } else {
+          const src = selectedSeat;
+          deselect();
+          dropOn(nr, src);
+        }
+      });
+
+      // Drag & Drop über Pointer Events (Maus + Touch)
+      let drag = null;
+      $("#seat-grid").addEventListener("pointerdown", function (e) {
+        const seat = e.target.closest(".seat");
+        if (!seat || lockMode) return;
+        const nr = +seat.dataset.nr;
+        if (!plan[nr]) return;
+        drag = { nr: nr, seat: seat, startX: e.clientX, startY: e.clientY, moved: false, ghost: null };
+        try { seat.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
+      });
+
+      document.addEventListener("pointermove", function (e) {
+        if (!drag) return;
+        if (!drag.moved) {
+          if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 8) return;
+          drag.moved = true;
+          drag.ghost = document.createElement("div");
+          drag.ghost.className = "ghost";
+          drag.ghost.textContent = plan[drag.nr];
+          document.body.appendChild(drag.ghost);
+          drag.seat.classList.add("seat--dragging");
+        }
+        drag.ghost.style.left = e.clientX + "px";
+        drag.ghost.style.top = e.clientY + "px";
+        document.querySelectorAll(".seat--over").forEach(function (el) { el.classList.remove("seat--over"); });
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const target = el && el.closest(".seat");
+        if (target && +target.dataset.nr !== drag.nr &&
+            layout().locked.indexOf(+target.dataset.nr) === -1) {
+          target.classList.add("seat--over");
+        }
+      });
+
+      document.addEventListener("pointerup", function (e) {
+        if (!drag) return;
+        const d = drag;
+        drag = null;
+        if (d.ghost) d.ghost.remove();
+        d.seat.classList.remove("seat--dragging");
+        document.querySelectorAll(".seat--over").forEach(function (el) { el.classList.remove("seat--over"); });
+        if (!d.moved) return; // war nur ein Klick → Tipp-Tausch übernimmt
+        suppressClick = true;
+        deselect();
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const target = el && el.closest(".seat");
+        if (target) dropOn(+target.dataset.nr, d.nr);
+      });
+
+      document.addEventListener("pointercancel", function () {
+        if (!drag) return;
+        if (drag.ghost) drag.ghost.remove();
+        drag.seat.classList.remove("seat--dragging");
+        drag = null;
+      });
+
+      // --- Mischen ---
+      function shufflePlan() {
+        if (!cls) return notify(["Bitte zuerst eine Klasse anlegen."], []);
+        if (!students().length) return notify(["Die Klasse hat noch keine Schülernamen."], []);
+        const present = presentStudents();
+        if (!present.length) return notify(["Alle sind als abwesend markiert."], []);
+        const result = S.checkConflicts(data.rules, students(), layout(), present);
+        if (result.errors.length) { notify(result.errors, result.hints); return; }
+        const solved = S.solve(present, data.rules, layout());
+        plan = solved.plan;
+        savePlan();
+        renderBoard();
+        const warns = result.hints.slice();
+        if (solved.unseated.length) {
+          warns.push("Ohne Platz geblieben: " + solved.unseated.join(", "));
+        }
+        if (solved.violations.length) {
+          notify([], warns.concat(["Keine vollständig regelkonforme Anordnung gefunden – beste Lösung wird gezeigt. Nicht erfüllt:"].concat(solved.violations)));
+        } else {
+          notify([], warns, ["Alle Regeln erfüllt. ✔"]);
+        }
+      }
+
+      // --- PNG-Export (SVG → Canvas, ohne externe Bibliothek) ---
+      function exportPng() {
+        const l = layout();
+        const seatW = 130, seatH = 72, gap = 10, aisleW = 28, margin = 24, headH = 36, boardH = 28;
+        function aislesBefore(col) {
+          return l.aisles.filter(function (a) { return a < col; }).length;
+        }
+        function x(col) { return margin + (col - 1) * (seatW + gap) + aislesBefore(col) * aisleW; }
+        function y(row) { return margin + headH + boardH + 16 + (row - 1) * (seatH + gap); }
+        const width = x(l.cols) + seatW + margin;
+        const height = y(l.rows) + seatH + margin;
+        function esc(s) {
+          return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+        }
+        const today = new Date().toLocaleDateString("de-DE");
+        const font = ' font-family="system-ui, sans-serif"';
+        let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">';
+        svg += '<rect width="100%" height="100%" fill="#ffffff"/>';
+        svg += '<text x="' + margin + '" y="' + (margin + 18) + '" font-size="20" font-weight="bold"' + font + '>' +
+          esc("Sitzplan" + (cls ? " " + cls.name : "") + " – " + today) + "</text>";
+        const boardW = (width - 2 * margin) * 0.6;
+        svg += '<rect x="' + ((width - boardW) / 2) + '" y="' + (margin + headH) + '" width="' + boardW +
+          '" height="' + boardH + '" rx="6" fill="#334155"/>';
+        svg += '<text x="' + (width / 2) + '" y="' + (margin + headH + boardH / 2 + 5) +
+          '" font-size="14" fill="#ffffff" text-anchor="middle"' + font + ">Tafel</text>";
+        for (let row = 1; row <= l.rows; row++) {
+          for (let col = 1; col <= l.cols; col++) {
+            const nr = (row - 1) * l.cols + col;
+            const locked = l.locked.indexOf(nr) !== -1;
+            const name = locked ? "" : (plan[nr] || "");
+            svg += '<rect x="' + x(col) + '" y="' + y(row) + '" width="' + seatW + '" height="' + seatH +
+              '" rx="8" fill="' + (locked ? "#e5e7eb" : "#ffffff") + '" stroke="#94a3b8" stroke-width="1.5"/>';
+            svg += '<text x="' + (x(col) + 8) + '" y="' + (y(row) + 16) + '" font-size="11" fill="#6b7280"' + font + '>' + nr + "</text>";
+            const label = locked ? "gesperrt" : name;
+            if (label) {
+              const fs = label.length > 16 ? 12 : label.length > 11 ? 14 : 17;
+              svg += '<text x="' + (x(col) + seatW / 2) + '" y="' + (y(row) + seatH / 2 + 6) +
+                '" font-size="' + fs + '" font-weight="' + (locked ? "normal" : "bold") +
+                '" fill="' + (locked ? "#9ca3af" : "#1f2937") + '" text-anchor="middle"' + font + '>' +
+                esc(label) + "</text>";
+            }
+          }
+        }
+        svg += "</svg>";
+
+        const img = new Image();
+        img.onload = function () {
+          const scale = 2;
+          const canvas = document.createElement("canvas");
+          canvas.width = width * scale;
+          canvas.height = height * scale;
+          const ctx = canvas.getContext("2d");
+          ctx.scale(scale, scale);
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob(function (blob) {
+            if (!blob) return;
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "sitzplan-" + (cls ? cls.name.replace(/[^\wäöüÄÖÜß-]+/g, "_") : "klasse") +
+              "-" + new Date().toISOString().slice(0, 10) + ".png";
+            a.click();
+            setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+          });
+        };
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      }
+
+      // --- Events ---
+      $("#class-select").addEventListener("change", function (e) {
+        setClass(ClassStore.getClass(e.target.value));
+      });
+      $("#class-new").addEventListener("click", function () {
+        const name = prompt("Name der neuen Klasse (z. B. 5a):");
+        if (!name || !name.trim()) return;
+        setClass(ClassStore.createClass(name));
+      });
+      $("#class-rename").addEventListener("click", function () {
+        if (!cls) return;
+        const name = prompt("Neuer Name für " + cls.name + ":", cls.name);
+        if (!name || !name.trim()) return;
+        ClassStore.renameClass(cls.id, name);
+        cls = ClassStore.getClass(cls.id);
+        renderAll();
+      });
+      $("#class-delete").addEventListener("click", function () {
+        if (!cls) return;
+        if (!confirm("Klasse „" + cls.name + "“ samt Regeln und Sitzplan löschen?")) return;
+        const id = cls.id;
+        ClassStore.deleteClass(id);
+        Store.removeClass(id);
+        setClass(ClassStore.getActiveClass());
+      });
+
+      const ta = $("#students-input");
+      ta.addEventListener("paste", function (e) {
+        let text = "";
+        try { text = (e.clipboardData || window.clipboardData).getData("text"); } catch (err) { /* Standard-Paste */ }
+        if (!text) return;
+        e.preventDefault();
+        const names = S.parseNames(text).join("\n");
+        const start = ta.selectionStart;
+        ta.value = ta.value.slice(0, start) + names + ta.value.slice(ta.selectionEnd);
+        ta.selectionStart = ta.selectionEnd = start + names.length;
+      });
+      $("#students-save").addEventListener("click", function () {
+        if (!cls) {
+          const name = prompt("Es gibt noch keine Klasse. Name der neuen Klasse:");
+          if (!name || !name.trim()) return;
+          cls = ClassStore.createClass(name);
+          data = Store.forClass(cls.id);
+          ClassStore.setActiveClass(cls.id);
+        }
+        const names = S.parseNames(ta.value);
+        ClassStore.setStudents(cls.id, names);
+        cls = ClassStore.getClass(cls.id);
+        // Plan von Namen befreien, die es nicht mehr gibt
+        Object.keys(plan).forEach(function (nr) {
+          if (names.indexOf(plan[nr]) === -1) delete plan[nr];
+        });
+        savePlan();
+        renderAll();
+      });
+
+      $("#rows-minus").addEventListener("click", function () { stepGrid("rows", -1, 1, 10); });
+      $("#rows-plus").addEventListener("click", function () { stepGrid("rows", 1, 1, 10); });
+      $("#cols-minus").addEventListener("click", function () { stepGrid("cols", -1, 1, 12); });
+      $("#cols-plus").addEventListener("click", function () { stepGrid("cols", 1, 1, 12); });
+
+      $("#lock-toggle").addEventListener("click", function () {
+        lockMode = !lockMode;
+        deselect();
+        this.classList.toggle("lock-on", lockMode);
+        this.setAttribute("aria-pressed", String(lockMode));
+        this.textContent = "🚫 Plätze sperren: " + (lockMode ? "AN" : "aus");
+      });
+
+      $("#rule-type").addEventListener("change", renderRuleFields);
+      $("#rule-add").addEventListener("click", addRule);
+      $("#btn-shuffle").addEventListener("click", shufflePlan);
+      $("#btn-print").addEventListener("click", function () { window.print(); });
+      $("#btn-png").addEventListener("click", exportPng);
+
+      function renderAll() {
+        renderClassSelect();
+        renderRoom();
+        renderRuleFields();
+        renderRules();
+        renderAbsent();
+        renderBoard();
+      }
+
+      // --- Start ---
+      setClass(ClassStore.getActiveClass() || ClassStore.getClasses()[0] || null);
+    })();
+  </script>
+</body>
+</html>

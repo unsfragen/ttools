@@ -12,4 +12,12 @@
 //   href: "tools/zufall/index.html",
 //   icon: "🎲",
 // },
-window.TOOLS = [];
+window.TOOLS = [
+  {
+    id: "sitzplan",
+    title: "Sitzplan",
+    desc: "Sitzplan-Generator: Raum einstellen, Regeln festlegen, mischen, anpassen, drucken.",
+    href: "tools/sitzplan.html",
+    icon: "🪑",
+  },
+];

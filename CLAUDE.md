@@ -20,7 +20,8 @@ ttools/
 │   ├── styles.css      # Design-Tokens (CSS Custom Properties) + Bausteine
 │   ├── classes.js      # window.ClassStore: geteilte Klassenlisten (localStorage)
 │   └── nav.js          # fügt die gemeinsame Kopfzeile ein
-└── tools/<id>/         # ein Ordner pro Tool, jeweils mit index.html
+└── tools/              # ein Tool = ein Ordner tools/<id>/index.html
+                        # ODER eine einzelne Datei tools/<id>.html (kleine Tools)
 ```
 
 ## Einbinde-Reihenfolge auf jeder Seite
@@ -54,6 +55,10 @@ ClassStore.subscribe(cb)             // cb läuft bei jeder Änderung; gibt unsu
 ## So füge ich ein neues Tool hinzu
 
 1. **Ordner anlegen:** `tools/<id>/` (z. B. `tools/zufall/`).
+   Kleine Tools dürfen alternativ als **eine Datei** `tools/<id>.html` angelegt
+   werden (so z. B. `tools/sitzplan.html`) — dann liegen die shared-Dateien nur
+   **eine** Ebene höher (`../shared/styles.css`, `../tools.js`) und `href` in
+   `tools.js` ist `tools/<id>.html`.
 
 2. **`tools/<id>/index.html` erstellen** – Vorlage (Pfade beachten: zwei
    Ebenen hoch zu den shared-Dateien):
